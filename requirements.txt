@@ -1,0 +1,7 @@
+icalendar
+recurring-ical-events
+requests
+Pillow
+python-bidi
+arabic-reshaper
+pytz
