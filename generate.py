@@ -1,11 +1,11 @@
 import os
-import re
 import datetime
 import pytz
 import requests
 import recurring_ical_events
 from icalendar import Calendar
 from PIL import Image, ImageDraw, ImageFont
+from bidi.algorithm import get_display  # pip install python-bidi
 
 WIDTH, HEIGHT = 800, 480
 TIMEZONE = pytz.timezone("Asia/Jerusalem")
@@ -18,25 +18,17 @@ HEBREW_MONTHS = {
 }
 HEBREW_DAYS = ["ראשון", "שני", "שלישי", "רביעי", "חמישי", "שישי", "שבת"]
 
+
 def reverse_hebrew_visually(text):
     """
-    הופך את האותיות בעברית בלבד והופך את סדר המקטעים כדי להתגבר 
-    על מגבלות הכיווניות (RTL) של מנועי רינדור בתמונות.
+    ממיר טקסט לוגי לסדר חזותי (bidi) עם כיוון בסיס RTL.
+    חשוב: הפונטים נטענים עם Layout.BASIC כדי ש-Pillow/raqm
+    לא יעשה bidi נוסף ויהפוך שוב (היפוך כפול).
     """
     if not text:
         return ""
-    text = str(text)
-    tokens = re.split(r'([\u0590-\u05FF]+)', text)
-    result = []
-    for token in tokens:
-        if not token:
-            continue
-        if re.match(r'^[\u0590-\u05FF]+$', token):
-            result.append(token[::-1])
-        else:
-            result.append(token)
-    result.reverse()
-    return "".join(result)
+    return get_display(str(text), base_dir="R")
+
 
 def get_font(size, bold=False):
     candidates = [
@@ -46,20 +38,22 @@ def get_font(size, bold=False):
     ]
     for path in candidates:
         if os.path.exists(path):
-            return ImageFont.truetype(path, size)
+            return ImageFont.truetype(path, size, layout_engine=ImageFont.Layout.BASIC)
+    print("WARNING: no Hebrew-capable font found, install fonts-freefont-ttf or fonts-dejavu")
     return ImageFont.load_default()
+
 
 def wrap_text(draw, text, font, max_width):
     """
-    מפרק מחרוזת ארוכה למספר שורות כדי שלא תגלוש מחוץ לקובייה.
+    שובר טקסט לוגי לשורות (לפני bidi!) כדי שלא יגלוש מחוץ לקובייה.
+    את reverse_hebrew_visually מפעילים אחר כך על כל שורה בנפרד.
     """
     words = str(text).split()
     lines = []
     current_line = []
     for word in words:
         test_line = " ".join(current_line + [word])
-        # מודדים את הרוחב של השורה. 
-        if draw.textlength(test_line, font=font) <= max_width:
+        if draw.textlength(reverse_hebrew_visually(test_line), font=font) <= max_width:
             current_line.append(word)
         else:
             if current_line:
@@ -70,6 +64,7 @@ def wrap_text(draw, text, font, max_width):
     if current_line:
         lines.append(" ".join(current_line))
     return lines
+
 
 def fetch_week_events(urls, sunday_start):
     saturday_end = sunday_start + datetime.timedelta(days=7)
@@ -88,10 +83,11 @@ def fetch_week_events(urls, sunday_start):
             summary = str(event.get("SUMMARY", "אירוע")).strip()
             dtstart_prop = event.get("DTSTART")
             dtend_prop = event.get("DTEND")
-            
-            if not dtstart_prop: continue
+
+            if not dtstart_prop:
+                continue
             dtstart = dtstart_prop.dt
-            
+
             if isinstance(dtstart, datetime.date) and not isinstance(dtstart, datetime.datetime):
                 all_day = True
                 dt_local_start = TIMEZONE.localize(datetime.datetime.combine(dtstart, datetime.time.min))
@@ -107,20 +103,23 @@ def fetch_week_events(urls, sunday_start):
                 else:
                     dt_local_end = dt_local_start + datetime.timedelta(hours=1)
 
-            # שיוך לימים הרלוונטיים בשבוע (משימה יכולה לגלוש למספר ימים)
+            # שיוך לימים הרלוונטיים בשבוע (אירוע יכול לגלוש למספר ימים)
             start_idx = (dt_local_start.date() - sunday_start.date()).days
             end_idx = (dt_local_end.date() - sunday_start.date()).days
-            
+
             for day_idx in range(max(0, start_idx), min(7, end_idx + 1)):
-                # אם משימה נגמרת ב-00:00 בדיוק, היא לא נחשבת כחלק מהיום הבא
-                if day_idx == end_idx and dt_local_end.time() == datetime.time.min and not all_day:
+                # אירוע שנגמר ב-00:00 בדיוק לא שייך ליום הבא.
+                # זה נכון גם לאירועי כל-היום (DTEND בהם הוא בלעדי),
+                # אחרת אירוע כל-היום היה מופיע ביום אחד יותר מדי.
+                if day_idx == end_idx and dt_local_end.time() == datetime.time.min:
                     continue
                 events_by_day[day_idx].append((all_day, dt_local_start, dt_local_end, summary))
 
-    # מיון לפי שעת התחלה
+    # מיון: כל-היום קודם, ואז לפי שעת התחלה
     for i in range(7):
         events_by_day[i].sort(key=lambda x: (not x[0], x[1]))
     return events_by_day
+
 
 def render_calendar(events_by_day, now, sunday_start):
     os.makedirs(os.path.dirname(OUTPUT_PATH), exist_ok=True)
@@ -143,7 +142,7 @@ def render_calendar(events_by_day, now, sunday_start):
     day_header_h = 35
     allday_top = day_header_top + day_header_h
     allday_h = 22      # אזור לאירועי כל-היום בראש הטור
-    
+
     grid_top = allday_top + allday_h
     grid_bottom = HEIGHT - 5
     grid_left = margin_left
@@ -167,9 +166,7 @@ def render_calendar(events_by_day, now, sunday_start):
     # שנתות וקווים לשעות בגריד
     for h in range(2, 24, 2):
         y = grid_top + h * px_per_hour
-        # תווית שעה בצד ימין
         draw.text((grid_right + 4, y), f"{h:02d}:00", font=font_time_label, fill=0, anchor="lm")
-        # קו רקע מנוקד עדין
         for x in range(int(grid_left), int(grid_right), 4):
             draw.point((x, int(y)), fill=0)
 
@@ -196,21 +193,21 @@ def render_calendar(events_by_day, now, sunday_start):
 
         day_events = events_by_day[i]
         allday_y_cursor = allday_top + 1
-        
-        for idx, (all_day, dt_start, dt_end, summary) in enumerate(day_events):
+
+        for all_day, dt_start, dt_end, summary in day_events:
             if all_day:
-                # ציור אירוע "כל היום" (פס שחור, טקסט לבן) בראש העמודה
+                # אירוע "כל היום": פס שחור, טקסט לבן בראש העמודה
                 if allday_y_cursor + 10 < grid_top:
                     draw.rectangle([col_left + 1, allday_y_cursor, col_right - 1, allday_y_cursor + 11], fill=0)
                     draw.text((col_right - 3, allday_y_cursor), reverse_hebrew_visually(summary[:12]), font=font_event, fill=1, anchor="ra")
                     allday_y_cursor += 12
             else:
-                # חישוב התחלה וסיום יחסי ליום הנוכחי (00:00 עד 24:00)
+                # התחלה וסיום יחסיים ליום הנוכחי (00:00 עד 24:00)
                 if dt_start.date() < current_day_date:
                     h_start = 0.0
                 else:
                     h_start = dt_start.hour + dt_start.minute / 60.0
-                    
+
                 if dt_end.date() > current_day_date:
                     h_end = 24.0
                 else:
@@ -218,24 +215,22 @@ def render_calendar(events_by_day, now, sunday_start):
 
                 y0 = grid_top + h_start * px_per_hour
                 y1 = grid_top + h_end * px_per_hour
-                
-                # גובה מינימלי לבלוק כך שלפחות שורת טקסט אחת תיכנס (גם אם הפגישה רק 15 דקות)
+
+                # גובה מינימלי לבלוק כך שלפחות שורת טקסט אחת תיכנס
                 y1_visual = max(y1, y0 + 14)
-                
-                # בלוק הפגישה (רקע לבן, מסגרת שחורה למניעת התנגשות עם קווי הרקע)
+
                 draw.rectangle([col_left + 1, y0, col_right - 1, y1_visual], outline=0, fill=1)
-                
-                # חיתוך וירידת שורה
-                lines = wrap_text(draw, summary, font_event, col_w - 4)
+
+                lines = wrap_text(draw, summary, font_event, col_w - 6)
                 text_y = y0 + 1
                 for line in lines:
                     if text_y + 11 > y1_visual:
-                        # אין מקום לשורות נוספות בתוך הבלוק הזה
                         break
                     draw.text((col_right - 3, text_y), reverse_hebrew_visually(line), font=font_event, fill=0, anchor="ra")
                     text_y += 12
 
     img.save(OUTPUT_PATH, format="BMP")
+
 
 if __name__ == "__main__":
     now = datetime.datetime.now(TIMEZONE)
