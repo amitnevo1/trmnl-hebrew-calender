@@ -5,6 +5,7 @@ import requests
 import recurring_ical_events
 from icalendar import Calendar
 from PIL import Image, ImageDraw, ImageFont
+from bidi.algorithm import get_display
 
 WIDTH, HEIGHT = 800, 480
 TIMEZONE = pytz.timezone("Asia/Jerusalem")
@@ -17,6 +18,12 @@ HEBREW_MONTHS = {
 }
 HEBREW_DAYS = ["ראשון", "שני", "שלישי", "רביעי", "חמישי", "שישי", "שבת"]
 
+def visual_text(text):
+    if not text:
+        return ""
+    # יוצר מחרוזת חזותית מותאמת ציור
+    return get_display(str(text))
+
 def get_font(size, bold=False):
     candidates = [
         "/usr/share/fonts/truetype/freefont/FreeSansBold.ttf" if bold else "/usr/share/fonts/truetype/freefont/FreeSans.ttf",
@@ -28,11 +35,18 @@ def get_font(size, bold=False):
             return ImageFont.truetype(path, size)
     return ImageFont.load_default()
 
+def draw_text_safe(draw, xy, text, font, fill, anchor="la"):
+    # ההגדרה direction="ltr" חוסמת את Pillow מלבצע היפוך כפול אוטומטי
+    draw.text(xy, visual_text(text), font=font, fill=fill, anchor=anchor, direction="ltr")
+
+def measure_text_safe(draw, text, font):
+    return draw.textlength(visual_text(text), font=font, direction="ltr")
+
 def truncate_text(draw, text, font, max_width):
     s = str(text).strip()
-    if draw.textlength(s, font=font, direction="rtl") <= max_width:
+    if measure_text_safe(draw, s, font) <= max_width:
         return s
-    while len(s) > 1 and draw.textlength(s + "..", font=font, direction="rtl") > max_width:
+    while len(s) > 1 and measure_text_safe(draw, s + "..", font) > max_width:
         s = s[:-1]
     return s + ".."
 
@@ -82,12 +96,11 @@ def render_calendar(events_by_day, now, sunday_start):
     margin_x = 12
     header_h = 46
 
-    # כותרות (מוגדרות מימין לשמאל באופן מובנה)
     month_title = f"{HEBREW_MONTHS[now.month]} {now.year}"
-    draw.text((WIDTH - margin_x - 4, 10), month_title, font=font_header, fill=0, anchor="ra", direction="rtl")
+    draw_text_safe(draw, (WIDTH - margin_x - 4, 10), month_title, font_header, 0, "ra")
     
     updated_str = f"עודכן {now.strftime('%H:%M')}"
-    draw.text((margin_x + 4, 15), updated_str, font=font_sub, fill=0, anchor="la", direction="rtl")
+    draw_text_safe(draw, (margin_x + 4, 15), updated_str, font_sub, 0, "la")
 
     grid_top = header_h
     grid_bottom = HEIGHT - 10
@@ -115,8 +128,8 @@ def render_calendar(events_by_day, now, sunday_start):
             fg = 0
 
         cx = (col_left + col_right) / 2.0
-        draw.text((cx, grid_top + 5), HEBREW_DAYS[i], font=font_day_name, fill=fg, anchor="ma", direction="rtl")
-        draw.text((cx, grid_top + 24), str(day_date.day), font=font_day_num, fill=fg, anchor="ma")
+        draw_text_safe(draw, (cx, grid_top + 5), HEBREW_DAYS[i], font_day_name, fg, "ma")
+        draw_text_safe(draw, (cx, grid_top + 24), str(day_date.day), font_day_num, fg, "ma")
 
         y = grid_top + day_header_h + 6
         max_text_w = col_w - 12
@@ -125,20 +138,19 @@ def render_calendar(events_by_day, now, sunday_start):
         for idx, (all_day, dt_local, summary) in enumerate(day_events):
             if y + 32 > grid_bottom - 4:
                 remaining = len(day_events) - idx
-                more_txt = f"+ עוד {remaining}"
-                draw.text((col_right - 6, grid_bottom - 18), more_txt, font=font_time, fill=0, anchor="ra", direction="rtl")
+                draw_text_safe(draw, (col_right - 6, grid_bottom - 18), f"+ עוד {remaining}", font_time, 0, "ra")
                 break
 
             if all_day:
                 draw.rectangle([col_left + 4, y, col_right - 4, y + 20], fill=0)
                 short_summary = truncate_text(draw, summary, font_event, max_text_w - 4)
-                draw.text((col_right - 7, y + 2), short_summary, font=font_event, fill=1, anchor="ra", direction="rtl")
+                draw_text_safe(draw, (col_right - 7, y + 2), short_summary, font_event, 1, "ra")
                 y += 24
             else:
-                draw.text((col_right - 6, y), dt_local.strftime("%H:%M"), font=font_time, fill=0, anchor="ra")
+                draw_text_safe(draw, (col_right - 6, y), dt_local.strftime("%H:%M"), font_time, 0, "ra")
                 y += 14
                 short_summary = truncate_text(draw, summary, font_event, max_text_w)
-                draw.text((col_right - 6, y), short_summary, font=font_event, fill=0, anchor="ra", direction="rtl")
+                draw_text_safe(draw, (col_right - 6, y), short_summary, font_event, 0, "ra")
                 y += 18
                 draw.line([(col_left + 6, y), (col_right - 6, y)], fill=0, width=1)
                 y += 4
