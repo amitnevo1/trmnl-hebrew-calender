@@ -1,5 +1,4 @@
 import os
-import re
 import datetime
 import pytz
 import requests
@@ -13,33 +12,18 @@ TIMEZONE = pytz.timezone("Asia/Jerusalem")
 OUTPUT_PATH = "docs/calendar.bmp"
 
 HEBREW_MONTHS = {
-    1: "ינואר",
-    2: "פברואר",
-    3: "מרץ",
-    4: "אפריל",
-    5: "מאי",
-    6: "יוני",
-    7: "יולי",
-    8: "אוגוסט",
-    9: "ספטמבר",
-    10: "אוקטובר",
-    11: "נובמבר",
-    12: "דצמבר",
+    1: "ינואר", 2: "פברואר", 3: "מרץ", 4: "אפריל",
+    5: "מאי", 6: "יוני", 7: "יולי", 8: "אוגוסט",
+    9: "ספטמבר", 10: "אוקטובר", 11: "נובמבר", 12: "דצמבר"
 }
 HEBREW_DAYS = ["ראשון", "שני", "שלישי", "רביעי", "חמישי", "שישי", "שבת"]
-HEBREW_TOKEN_RE = re.compile(r"[\u0590-\u05FF]+")
 
 
 def shape_bidi_text(text):
     if not text:
         return ""
-    s = str(text)
-    # מעבד כל רצף אותיות עבריות בנפרד כדי שספרות ושעות לא ישבשו את הכיוון
-    def _fix_hebrew_word(match):
-        return get_display(match.group(0), base_dir="R")
-
-    fixed = HEBREW_TOKEN_RE.sub(_fix_hebrew_word, s)
-    return get_display(fixed, base_dir="R")
+    # הפעלה בודדת של ההיפוך מימין לשמאל
+    return get_display(str(text), base_dir="R")
 
 
 def get_font(size, bold=False):
@@ -55,10 +39,6 @@ def get_font(size, bold=False):
 
 
 def draw_rtl_sequence(draw, x_right, y, segments, fill=0):
-    """
-    segments: רשימה של טאפלים (טקסט_ללא_עיבוד, פונט, is_hebrew) בסדר ימין-לשמאל.
-    כל מקטע מצויר בנפרד מימין לשמאל כך שאין ערבוב BiDi בין עברית למספרים/אנגלית.
-    """
     cursor_x = x_right
     for raw_text, font, is_hebrew in segments:
         if not raw_text:
@@ -124,7 +104,6 @@ def render_calendar(events_by_day, now, sunday_start):
     margin_x = 12
     header_h = 46
 
-    # כותרת חודש ושנה מימין, ושעת עדכון משמאל
     draw_rtl_sequence(
         draw,
         WIDTH - margin_x - 4,
@@ -165,7 +144,6 @@ def render_calendar(events_by_day, now, sunday_start):
         else:
             fg = 0
 
-        # כותרת יום: שם היום בעברית ומספר היום מתחתיו
         day_label = shape_bidi_text(HEBREW_DAYS[i])
         cx = (col_left + col_right) / 2.0
         draw.text((cx, grid_top + 5), day_label, font=font_day_name, fill=fg, anchor="ma")
